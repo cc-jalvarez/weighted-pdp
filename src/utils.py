@@ -13,8 +13,8 @@ from sklearn.metrics import average_precision_score, precision_recall_curve, auc
 from sklearn.model_selection import StratifiedKFold
 import optuna
 import optuna.integration.lightgbm as lgb
-from pytorch_tabnet.tab_model import TabNetClassifier
-
+# from pytorch_tabnet.tab_model import TabNetClassifier
+import random
 import numpy as np
 #from scipy import stats
 from sklearn.neighbors import KNeighborsClassifier
@@ -22,6 +22,19 @@ from sklearn.neighbors._base import _get_weights
 from sklearn.utils.validation import _num_samples
 from sklearn.utils.extmath import weighted_mode
 
+def set_seed(seed=None):
+    """
+    Set random seed for reproducibility.
+    :param seed: the random seed. If None, no action is taken. Default: None
+    :param seed_torch: if True, sets the random seed for pytorch. Default: True.
+    :return:
+    """
+    if seed is None:
+        np.random.seed(42)
+        seed = np.random.choice(2**32)
+    random.seed(seed)
+    np.random.seed(seed)
+    print(f"Random seed {seed} has been set.")
 
 class KNeighborsClassifierW(KNeighborsClassifier):
 
@@ -203,18 +216,18 @@ class Objective(object):
                                         n_estimators = trial.suggest_int('n_estimators', 50, 200),
                                         max_depth = trial.suggest_int('max_depth', 3, 150),
                                         n_jobs = -1))])
-        elif self.clf_name == "TABNET":
-            estimator = Pipeline(steps = [
-                      ('one hot', one_hot_transformer),
-                      ('clf', TabNetClassifier(
-                          #n_d = trial.suggest_int('n_d', 8, 64, log=True),
-                          #n_a = trial.suggest_int('n_a', 8, 64, log=True),
-                          #n_steps  = trial.suggest_int('n_steps', 3, 10),
-                          #gamma  = trial.suggest_float('gamma', 1.0, 2.0),
-                          #n_independent  = trial.suggest_int('n_independent', 1, 5),
-                          n_shared  = trial.suggest_int('n_shared', 1, 5)
-                          #mask_type  = trial.suggest_categorical('mask_type', ['sparsemax', 'entmax'])
-                          ))])
+        # elif self.clf_name == "TABNET":
+        #     estimator = Pipeline(steps = [
+        #               ('one hot', one_hot_transformer),
+        #               ('clf', TabNetClassifier(
+        #                   #n_d = trial.suggest_int('n_d', 8, 64, log=True),
+        #                   #n_a = trial.suggest_int('n_a', 8, 64, log=True),
+        #                   #n_steps  = trial.suggest_int('n_steps', 3, 10),
+        #                   #gamma  = trial.suggest_float('gamma', 1.0, 2.0),
+        #                   #n_independent  = trial.suggest_int('n_independent', 1, 5),
+        #                   n_shared  = trial.suggest_int('n_shared', 1, 5)
+        #                   #mask_type  = trial.suggest_categorical('mask_type', ['sparsemax', 'entmax'])
+        #                   ))])
         elif self.clf_name == "DT":
             estimator = Pipeline(steps = [
                       ('one hot', one_hot_transformer),
@@ -402,11 +415,11 @@ def build_model(clf_name, categorical_columns, hyparameters):
         one_hot_transformer = ColumnTransformer([('onehot', OneHotEncoder(handle_unknown = 'ignore', sparse = False),
                                          categorical_columns)], 
                                          remainder='passthrough')
-        if clf_name == "TABNET" or clf_name == "TABNET0":
-                estimator = Pipeline(steps = [
-                      ('one hot', one_hot_transformer),
-                      ('clf', TabNetClassifier(**hyparameters))])
-        
+        # if clf_name == "TABNET" or clf_name == "TABNET0":
+        #         estimator = Pipeline(steps = [
+        #               ('one hot', one_hot_transformer),
+        #               ('clf', TabNetClassifier(**hyparameters))])
+        #
         if clf_name == "RF":
                 estimator = Pipeline(steps = [
                       ('one hot', one_hot_transformer),
