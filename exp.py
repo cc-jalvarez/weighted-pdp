@@ -86,6 +86,7 @@ def get_data(filename, seed: int = 42, synth_weight: float = 0.10, state1: str =
         ax.hist(df_ood["X0"], alpha=.5, label="True Distribution")
         ax.legend()
         ax.set_title("X0 distribution in training and true data - sw={}".format(synth_weight))
+        #todo: why the plots folder on top of the img_fld?
         # plt.savefig("C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\synth_data_{}.png".format(synth_weight), dpi=300, bbox_inches='tight')
         plt.savefig(plot_path + "synth_data_{}.png".format(synth_weight), dpi=300, bbox_inches='tight')
     return df_in_tr, df_in_te, df_ood, atts
@@ -171,8 +172,8 @@ def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10):
 
 
 def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
-                  state1: str = "CA", state2: str = "PR", run = "unweighted",
-                  img_fold = "C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot",
+                  state1: str = "CA", state2: str = "PR", run: str = "unweighted",
+                  img_fold: str = None,
                   bins: int or np.array = 10):
     """
     Test the model and plot the results
@@ -208,25 +209,20 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         print(df_in_tr["weight"].isna().sum())
         print(df_in_te["weight"].isna().sum())
         # print(df_ood["weight"].isna().sum())
-        clf_oracle = train_model(df_ood, atts, model_type=classifier,
-                                 seed=seed)
+        clf_oracle = train_model(df_ood, atts, model_type=classifier, seed=seed)
     elif run == "deployed":
         df_in_tr, bins_ = get_weights(df_in_tr, df_ood, var_sel, bins=bins)
-        clf = train_model(df_in_tr, atts, model_type=classifier,
-                          seed=seed, weight_column=None)
+        clf = train_model(df_in_tr, atts, model_type=classifier, seed=seed, weight_column=None)
         tmp = df_in_tr[["occ", "weight"]].copy().groupby(["occ"], as_index=False).mean().reset_index()
         df_in_te["occ"] = np.digitize(df_in_te[var_sel], bins=bins_)
         df_in_te = df_in_te.merge(tmp, on="occ", how="left")
         print(df_in_tr["weight"].isna().sum())
         print(df_in_te["weight"].isna().sum())
         # print(df_ood["weight"].isna().sum())
-        clf_oracle = train_model(df_ood, atts, model_type=classifier,
-                                 seed=seed)
+        clf_oracle = train_model(df_ood, atts, model_type=classifier, seed=seed)
     elif run == "unweighted":
-        clf = train_model(df_in_tr, atts, model_type=classifier,
-                          seed=seed)
-        clf_oracle = train_model(df_ood, atts, model_type=classifier,
-                          seed=seed)
+        clf = train_model(df_in_tr, atts, model_type=classifier, seed=seed)
+        clf_oracle = train_model(df_ood, atts, model_type=classifier, seed=seed)
     scores_in = clf.predict_proba(df_in_te[atts])[:, 1]
     scores_ood = clf.predict_proba(df_ood[atts])[:, 1]
     preds_in = clf.predict(df_in_te[atts])
@@ -251,16 +247,17 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         os.mkdir("results/{}".format(dataset_name))
     if not os.path.exists("plots"):
         os.mkdir("plots")
-    res.to_csv("results/{}/results_{}_{}.csv".format(dataset_name,clf.__class__.__name__, run), index=False)
+    res.to_csv("results/{}/results_{}_{}.csv".format(dataset_name, clf.__class__.__name__, run), index=False)
     for col in columns_of_interest:
         pf_insample_unw = "{}/plots/{}_{}_{}_{}_in_{}_nbins{}.png".format(img_fold, clf.__class__.__name__,
-                                                               dataset_name, sw, col, run, bins)
+                                                                          dataset_name, sw, col, run, bins)
         pf_ood_unw = "{}/plots/{}_{}_{}_{}_ood_{}_nbins{}.png".format(img_fold, clf.__class__.__name__,
-                                                           dataset_name, sw, col, run, bins)
+                                                                      dataset_name, sw, col, run, bins)
         if run == "unweighted":
             # plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=None, path_file=pf_insample_unw)
             # plot_and_save_weighted_pdp(clf, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
-            multiple_plot_and_save_weighted_pdp([clf, clf_oracle], [df_in_te[atts], df_ood[atts]], [col], weight_column=None,
+            multiple_plot_and_save_weighted_pdp([clf, clf_oracle], [df_in_te[atts], df_ood[atts]], [col],
+                                                weight_column=None,
                                                 list_labels=llabels,
                                                 path_file=pf_insample_unw.replace("_in_", "_both_"))
         elif run == "sandbox":
@@ -289,8 +286,7 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
                                                 path_file=pf_insample_unw.replace("_in_", "_both_"))
 
 
-def plot_and_save_weighted_pdp(clf, X, columns_of_interest: list, weight_column: pd.Series = None,
-                               path_file: str = "default.png"):
+def plot_and_save_weighted_pdp(clf, X, columns_of_interest: list, weight_column: pd.Series = None, path_file: str = "default.png"):
     """
     Plot and save the weighted PDP
     clf: sklearn.base.BaseEstimator - classifier to use
@@ -415,13 +411,14 @@ def multiple_plot_and_save_weighted_pdp(clf: list, X: list, columns_of_interest:
         plt.clf()
 
 
-def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", state2="OH", bins=10):
+def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", state2="OH", bins=10,
+         img_fold: str = "C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot"):
     """
     Main function to run the experiments
     """
-    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="unweighted")
-    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="sandbox", bins=bins)
-    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="deployed", bins=bins)
+    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, img_fold=img_fold, run="unweighted")
+    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, img_fold=img_fold, run="sandbox", bins=bins)
+    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, img_fold=img_fold, run="deployed", bins=bins)
 
 
 if __name__ == "__main__":
