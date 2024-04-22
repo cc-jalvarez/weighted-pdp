@@ -17,7 +17,8 @@ import random
 import os
 import argparse
 
-#settings for the plots
+
+# settings for the plots
 plt.style.use('seaborn-whitegrid')
 plt.rc('font', size=16)
 plt.rc('legend', fontsize=16)
@@ -32,7 +33,8 @@ plt.rc('pdf', fonttype=42)
 plt.rc('ps', fonttype=42)
 
 
-def get_data(filename, seed: int = 42, synth_weight: float = 0.10, state1 = "CA", state2 = "PR"):
+def get_data(filename, seed: int = 42, synth_weight: float = 0.10, state1: str = "CA", state2: str = "PR",
+             plot_path: str = "C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\"):
     """
     Get the data for the experiment
     filename: str - name of the dataset to use
@@ -64,14 +66,15 @@ def get_data(filename, seed: int = 42, synth_weight: float = 0.10, state1 = "CA"
         ax.hist(df_ood["AGEP"], alpha=.5, label="{} Sample".format(state2))
         ax.legend()
         ax.set_title("Age distribution in CA and PR")
-        plt.savefig("C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\flktables_{}{}_agedistr.png".format(state1, state2), dpi=300, bbox_inches='tight')
+        # plt.savefig("C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\flktables_{}{}_agedistr.png".format(state1, state2), dpi=300, bbox_inches='tight')
+        plt.savefig(plot_path + "flktables_{}{}_agedistr.png".format(state1, state2), dpi=300, bbox_inches='tight')
     elif filename == "synth":
         X, y = make_classification(n_samples=10000, n_features=10, n_informative=2, n_redundant=0, random_state=seed)
         #add a sample selection method
         atts = ["X{}".format(i) for i in range(10)]
         df = pd.DataFrame(X, columns=atts)
         df["TARGET"] = y
-        df["biased_choice"] = np.where(df["X0"] > 0, synth_weight, 1- synth_weight)
+        df["biased_choice"] = np.where(df["X0"] > 0, synth_weight, 1 - synth_weight)
         df["biased_choiceRnd"] = df["biased_choice"].transform(lambda x: random.choices([0, 1], [x, 1-x])[0])
         df_in, df_ood = train_test_split(df, test_size=0.3, random_state=42, stratify=df["TARGET"])
         df_ood.drop(["biased_choice", "biased_choiceRnd"], inplace=True, axis=1)
@@ -83,7 +86,8 @@ def get_data(filename, seed: int = 42, synth_weight: float = 0.10, state1 = "CA"
         ax.hist(df_ood["X0"], alpha=.5, label="True Distribution")
         ax.legend()
         ax.set_title("X0 distribution in training and true data - sw={}".format(synth_weight))
-        plt.savefig("C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\synth_data_{}.png".format(synth_weight), dpi=300, bbox_inches='tight')
+        # plt.savefig("C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\synth_data_{}.png".format(synth_weight), dpi=300, bbox_inches='tight')
+        plt.savefig(plot_path + "synth_data_{}.png".format(synth_weight), dpi=300, bbox_inches='tight')
     return df_in_tr, df_in_te, df_ood, atts
 
 
@@ -98,7 +102,7 @@ def train_model(df_in_tr, atts, model_type='xgb', weight_column=None, seed=42):
     """
     if model_type == 'xgb':
         clf = XGBClassifier(n_jobs=4, random_state=seed)
-        clf.fit(df_in_tr[atts], df_in_tr["TARGET"],sample_weight=weight_column)
+        clf.fit(df_in_tr[atts], df_in_tr["TARGET"], sample_weight=weight_column)
     elif model_type == 'lr':
         clf = LogisticRegression(random_state=seed)
         clf.fit(df_in_tr[atts], df_in_tr["TARGET"])
@@ -112,6 +116,7 @@ def train_model(df_in_tr, atts, model_type='xgb', weight_column=None, seed=42):
         clf = MLPClassifier(random_state=seed)
         clf.fit(df_in_tr[atts], df_in_tr["TARGET"])
     return clf
+
 
 def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10):
     """
@@ -163,9 +168,6 @@ def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10):
     df_s["occ"] = binned_source
     df_s["weight"] = df_s["weight"].map(dict_map)
     return df_s, bins_
-
-
-
 
 
 def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
@@ -287,7 +289,6 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
                                                 path_file=pf_insample_unw.replace("_in_", "_both_"))
 
 
-
 def plot_and_save_weighted_pdp(clf, X, columns_of_interest: list, weight_column: pd.Series = None,
                                path_file: str = "default.png"):
     """
@@ -315,9 +316,9 @@ def plot_and_save_weighted_pdp(clf, X, columns_of_interest: list, weight_column:
 
         # calculate PD for both classifiers
         pd_clf = pdw.partial_dependence(clf, X, [theme_var],
-                                   grid_resolution=grid_res,
-                                   method='brute', kind='average', response_method='predict_proba',
-                                   sample_weight=weight_column)
+                                        grid_resolution=grid_res,
+                                        method='brute', kind='average', response_method='predict_proba',
+                                        sample_weight=weight_column)
         # store results
         pdp_res[theme_var] = {}
         pdp_res[theme_var]['CLF'] = pd_clf
@@ -348,6 +349,7 @@ def plot_and_save_weighted_pdp(clf, X, columns_of_interest: list, weight_column:
                     dpi=300)
         # close with current plot
         plt.clf()
+
 
 def multiple_plot_and_save_weighted_pdp(clf: list, X: list, columns_of_interest: list,
                                         weight_column: list = None,
@@ -412,6 +414,7 @@ def multiple_plot_and_save_weighted_pdp(clf: list, X: list, columns_of_interest:
         # close with current plot
         plt.clf()
 
+
 def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", state2="OH", bins=10):
     """
     Main function to run the experiments
@@ -419,6 +422,7 @@ def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", 
     test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="unweighted")
     test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="sandbox", bins=bins)
     test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="deployed", bins=bins)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
