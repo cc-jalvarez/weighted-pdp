@@ -32,6 +32,59 @@ plt.rc('pdf', fonttype=42)
 plt.rc('ps', fonttype=42)
 
 
+def get_data(filename, seed: int = 42, synth_weight: float = 0.10, state1 = "CA", state2 = "PR"):
+    """
+    Get the data for the experiment
+    filename: str - name of the dataset to use
+    seed: int - seed for reproducibility
+    synth_weight: float - synthetic weight for the synthetic dataset
+    state1: str - state 1 for the folktables dataset
+    state2: str - state 2 for the folktables dataset
+    """
+    set_seed(seed)
+    if filename == "folktables":
+        data_source = ACSDataSource(survey_year="2018", horizon="1-Year", survey="person")
+        ca_data = data_source.get_data(states=[state1], download=True)
+        ca_data_ood = data_source.get_data(states=[state2], download=True)
+        # features, label, group = ACSEmployment.df_to_numpy(acs_data)
+        ca_features, ca_labels, ca_group = ACSIncome.df_to_pandas(ca_data)
+        ca_features = ca_features.drop(columns="RAC1P")
+        ca_features["group"] = ca_group
+        df_in = ca_features.copy()
+        df_in["TARGET"] = ca_labels.astype(int)
+        atts = ca_features.columns
+        ca_features, ca_labels, ca_group = ACSIncome.df_to_pandas(ca_data_ood)
+        ca_features = ca_features.drop(columns="RAC1P")
+        ca_features["group"] = ca_group
+        df_ood = ca_features.copy()
+        df_ood["TARGET"] = ca_labels.astype(int)
+        df_in_tr, df_in_te = train_test_split(df_in, test_size=0.2, random_state=seed, stratify=df_in["TARGET"])
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        ax.hist(df_in_tr["AGEP"], alpha=1, label="{} Sample".format(state1))
+        ax.hist(df_ood["AGEP"], alpha=.5, label="{} Sample".format(state2))
+        ax.legend()
+        ax.set_title("Age distribution in CA and PR")
+        plt.savefig("C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\flktables_{}{}_agedistr.png".format(state1, state2), dpi=300, bbox_inches='tight')
+    elif filename == "synth":
+        X, y = make_classification(n_samples=10000, n_features=10, n_informative=2, n_redundant=0, random_state=seed)
+        #add a sample selection method
+        atts = ["X{}".format(i) for i in range(10)]
+        df = pd.DataFrame(X, columns=atts)
+        df["TARGET"] = y
+        df["biased_choice"] = np.where(df["X0"] > 0, synth_weight, 1- synth_weight)
+        df["biased_choiceRnd"] = df["biased_choice"].transform(lambda x: random.choices([0, 1], [x, 1-x])[0])
+        df_in, df_ood = train_test_split(df, test_size=0.3, random_state=42, stratify=df["TARGET"])
+        df_ood.drop(["biased_choice", "biased_choiceRnd"], inplace=True, axis=1)
+        df_in_tr = df_in[df_in["biased_choiceRnd"] == 0].copy()
+        df_in_val = df_in[df_in["biased_choiceRnd"] == 1].copy()
+        df_in_tr, df_in_te = train_test_split(df_in_tr, test_size=.3, random_state=42, stratify=df_in_tr["TARGET"])
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        ax.hist(df_in_tr["X0"], alpha=1, label="Sample Biased")
+        ax.hist(df_ood["X0"], alpha=.5, label="True Distribution")
+        ax.legend()
+        ax.set_title("X0 distribution in training and true data - sw={}".format(synth_weight))
+        plt.savefig("C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\synth_data_{}.png".format(synth_weight), dpi=300, bbox_inches='tight')
+    return df_in_tr, df_in_te, df_ood, atts
 
 
 def train_model(df_in_tr, atts, model_type='xgb', weight_column=None, seed=42):
@@ -60,7 +113,7 @@ def train_model(df_in_tr, atts, model_type='xgb', weight_column=None, seed=42):
         clf.fit(df_in_tr[atts], df_in_tr["TARGET"])
     return clf
 
-def get_weights(df_s, df_t, var_sel):
+def get_weights(df_s, df_t, var_sel, bins: int or np.array = 5):
     """
     Get the weights for the source dataset
     these are the weights that are used to reweight the source dataset to look like the target dataset
@@ -71,88 +124,49 @@ def get_weights(df_s, df_t, var_sel):
     df_t: pd.DataFrame - target dataset
     var_sel: str - variable to use for the reweighting
     """
-    bins_ = np.histogram_bin_edges(df_t[var_sel], bins=10)
-    occ_1 = np.digitize(df_s[var_sel], bins=bins_)
-    occ_2 = np.digitize(df_t[var_sel], bins=bins_)
+    if type(bins) == int:
+        bins_ = np.histogram_bin_edges(df_t[var_sel], bins=bins)
+    else:
+        bins_ = bins
+    # get the bins for the source dataset
+    binned_source = np.digitize(df_s[var_sel], bins=bins_)
+    binned_target = np.digitize(df_t[var_sel], bins=bins_)
     # check if the bins are the same
-    if occ_1.max() < occ_2.max():
-        limit = occ_2.max() - occ_1.max()
+    if binned_source.max() < binned_target.max():
+        limit = binned_target.max() - binned_source.max()
         bins_ = bins_[:-limit]
-        occ_2 = np.digitize(df_t[var_sel], bins=bins_)
-    if occ_1.min() < occ_2.min():
-        limit = occ_2.min() - occ_1.min()
+        binned_target = np.digitize(df_t[var_sel], bins=bins_)
+    if binned_source.min() < binned_target.min():
+        limit = binned_target.min() - binned_source.min()
         bins_ = bins_[limit:]
-        occ_1 = np.digitize(df_s[var_sel], bins=bins_)
+        binned_source = np.digitize(df_s[var_sel], bins=bins_)
     # get the relative weights for the source dataset
-    counts_1 = np.unique(occ_1, return_counts=True)[1]
-    counts_2 = np.unique(occ_2, return_counts=True)[1]
-    total_1 = np.sum(counts_1)
-    total_2 = np.sum(counts_2)
-    norm_weight_1 = counts_1 / total_1
-    norm_weight_2 = counts_2 / total_2
+    counts_source = np.unique(binned_source, return_counts=True)[1]
+    counts_target = np.unique(binned_target, return_counts=True)[1]
+    total_source = np.sum(counts_source)
+    total_target = np.sum(counts_target)
+    # norm_weight_source = P(S=1|X_bin)
+    """
+    A simple case is when the points are defined over a discrete set.
+    Pr[s = 1|x] can then be estimated from the frequency mx/nx, where mx denotes the number of times
+    x appeared in S ⊆ U and nx the number of times x appeared in the full data set U.
+    Pr[s = 1] can be estimated by the quantity |S|/|U|. However, since Pr[s = 1] is a
+    constant independent of x, its estimation is not even necessary.
+    """
+    denonminator = counts_source/counts_target
+    numerator = total_source/total_target
     # get the weights
-    weights = norm_weight_2/ (norm_weight_1)
-    dict_map = {q: w for q, w in zip(np.unique(occ_1), weights)}
-    df_s["weight"] = occ_1
-    df_s["occ"] = occ_1
+    weights = numerator/denonminator
+    sum_weights = np.sum(weights)
+    dict_map = {q: w for q, w in zip(np.unique(binned_source), weights/sum_weights)}
+    df_s["weight"] = binned_source
+    df_s["occ"] = binned_source
     df_s["weight"] = df_s["weight"].map(dict_map)
     return df_s, bins_
 
 
 
-def get_data(filename, seed: int = 42, synth_weight: float = 0.10, state1 = "CA", state2 = "PR"):
-    """
-    Get the data for the experiment
-    filename: str - name of the dataset to use
-    seed: int - seed for reproducibility
-    synth_weight: float - synthetic weight for the synthetic dataset
-    state1: str - state 1 for the folktables dataset
-    state2: str - state 2 for the folktables dataset
-    """
-    set_seed(seed)
-    if filename == "folktables":
-        data_source = ACSDataSource(survey_year="2018", horizon="1-Year", survey="person")
-        ca_data = data_source.get_data(states=[state1], download=True)
-        ca_data_ood = data_source.get_data(states=[state2], download=True)
-        # features, label, group = ACSEmployment.df_to_numpy(acs_data)
-        ca_features, ca_labels, ca_group = ACSIncome.df_to_pandas(ca_data)
-        ca_features = ca_features.drop(columns="RAC1P")
-        ca_features["group"] = ca_group
-        df_in = ca_features.copy()
-        df_in["TARGET"] = ca_labels.astype(int)
-        atts = ca_features.columns
-        ca_features, ca_labels, ca_group = ACSIncome.df_to_pandas(ca_data_ood)
-        ca_features = ca_features.drop(columns="RAC1P")
-        ca_features["group"] = ca_group
-        df_ood = ca_features.copy()
-        df_ood["TARGET"] = ca_labels.astype(int)
-        df_in_tr, df_in_te = train_test_split(df_in, test_size=0.2, random_state=42, stratify=df_in["TARGET"])
-        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-        ax.hist(df_in_tr["AGEP"], alpha=1, label="{} Sample".format(state1))
-        ax.hist(df_ood["AGEP"], alpha=.5, label="{} Sample".format(state2))
-        ax.legend()
-        ax.set_title("Age distribution in CA and PR")
-        plt.savefig("plots/flktables_{}{}_agedistr.png".format(state1, state2), dpi=300, bbox_inches='tight')
-    elif filename == "synth":
-        X, y = make_classification(n_samples=10000, n_features=10, n_informative=2, n_redundant=0, random_state=seed)
-        #add a sample selection method
-        atts = ["X{}".format(i) for i in range(10)]
-        df = pd.DataFrame(X, columns=atts)
-        df["TARGET"] = y
-        df["biased_choice"] = np.where(df["X0"] > 0, synth_weight, 1- synth_weight)
-        df["biased_choiceRnd"] = df["biased_choice"].transform(lambda x: random.choices([0, 1], [x, 1-x])[0])
-        df_in, df_ood = train_test_split(df, test_size=0.3, random_state=42, stratify=df["TARGET"])
-        df_ood.drop(["biased_choice", "biased_choiceRnd"], inplace=True, axis=1)
-        df_in_tr = df_in[df_in["biased_choiceRnd"] == 0].copy()
-        df_in_val = df_in[df_in["biased_choiceRnd"] == 1].copy()
-        df_in_tr, df_in_te = train_test_split(df_in_tr, test_size=.3, random_state=42, stratify=df_in_tr["TARGET"])
-        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-        ax.hist(df_in_tr["X0"], alpha=1, label="Sample Biased")
-        ax.hist(df_ood["X0"], alpha=.5, label="True Distribution")
-        ax.legend()
-        ax.set_title("X0 distribution in training and true data - sw={}".format(synth_weight))
-        plt.savefig("plots/synth_data_{}.png".format(synth_weight), dpi=300, bbox_inches='tight')
-    return df_in_tr, df_in_te, df_ood, atts
+
 
 def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
                   state1: str = "CA", state2: str = "PR", run = "unweighted"):
@@ -166,6 +180,7 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
     state2: str - state 2 for the folktables dataset
     run: str - type of experiment, can be "unweighted", "sandbox" or "deployed"
     """
+    set_seed(seed)
     df_in_tr, df_in_te, df_ood, atts = get_data(dataset_name, seed=seed, synth_weight=sw, state1=state1, state2=state2)
     if dataset_name == "synth":
         columns_of_interest = ["X0", "X1"]
@@ -186,11 +201,9 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         tmp = df_in_tr[["occ", "weight"]].copy().groupby(["occ"], as_index=False).mean().reset_index()
         df_in_te["occ"] = np.digitize(df_in_te[var_sel], bins=bins_)
         df_in_te = df_in_te.merge(tmp, on="occ", how="left")
-        df_ood["occ"] = np.digitize(df_ood[var_sel], bins=bins_)
-        df_ood = df_ood.merge(tmp, on="occ", how="left")
         print(df_in_tr["weight"].isna().sum())
         print(df_in_te["weight"].isna().sum())
-        print(df_ood["weight"].isna().sum())
+        # print(df_ood["weight"].isna().sum())
         clf_oracle = train_model(df_ood, atts, model_type=classifier,
                                  seed=seed)
     elif run == "deployed":
@@ -200,11 +213,9 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         tmp = df_in_tr[["occ", "weight"]].copy().groupby(["occ"], as_index=False).mean().reset_index()
         df_in_te["occ"] = np.digitize(df_in_te[var_sel], bins=bins_)
         df_in_te = df_in_te.merge(tmp, on="occ", how="left")
-        df_ood["occ"] = np.digitize(df_ood[var_sel], bins=bins_)
-        df_ood = df_ood.merge(tmp, on="occ", how="left")
         print(df_in_tr["weight"].isna().sum())
         print(df_in_te["weight"].isna().sum())
-        print(df_ood["weight"].isna().sum())
+        # print(df_ood["weight"].isna().sum())
         clf_oracle = train_model(df_ood, atts, model_type=classifier,
                                  seed=seed)
     elif run == "unweighted":
@@ -238,40 +249,41 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         os.mkdir("plots")
     res.to_csv("results/{}/results_{}_{}.csv".format(dataset_name,clf.__class__.__name__, run), index=False)
     for col in columns_of_interest:
-        pf_insample_unw = "plots/{}_{}_{}_{}_in_{}.png".format(clf.__class__.__name__,
+        pf_insample_unw = "C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\{}_{}_{}_{}_in_{}.png".format(clf.__class__.__name__,
                                                                dataset_name, sw, col, run)
-        pf_ood_unw = "plots/{}_{}_{}_{}_ood_{}.png".format(clf.__class__.__name__,
+        pf_ood_unw = "C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\{}_{}_{}_{}_ood_{}.png".format(clf.__class__.__name__,
                                                            dataset_name, sw, col, run)
         if run == "unweighted":
             plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=None, path_file=pf_insample_unw)
             plot_and_save_weighted_pdp(clf, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
-            multiple_plot_and_save_weighted_pdp([clf, clf_oracle], [df_ood[atts], df_ood[atts]], [col], weight_column=None,
+            multiple_plot_and_save_weighted_pdp([clf, clf_oracle], [df_in_te[atts], df_ood[atts]], [col], weight_column=None,
                                                 list_labels=llabels,
                                                 path_file=pf_insample_unw.replace("_in_", "_both_"))
         elif run == "sandbox":
             if dataset_name == "synth":
-                llabels = ["unweighted - Biased data", "weighted - Biased data", "Oracle - whole data"]
+                llabels = ["unweighted - Biased data", "weighted - Biased data", "Oracle - target data"]
             else:
                 llabels = ["unweighted - {}".format(state2), "weighted - {}".format(state2), "{} - Oracle".format(state2)]
             # try:
             plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=df_in_te["weight"], path_file=pf_insample_unw)
             # except: import pdb; pdb.set_trace()
             plot_and_save_weighted_pdp(clf, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
-            multiple_plot_and_save_weighted_pdp([clf, clf, clf_oracle], [df_ood[atts], df_ood[atts], df_ood[atts]],
-                                                [col], weight_column=[None, df_ood["weight"], None],
+            multiple_plot_and_save_weighted_pdp([clf, clf, clf_oracle], [df_in_te[atts], df_in_te[atts], df_ood[atts]],
+                                                [col], weight_column=[None, df_in_te["weight"], None],
                                                 list_labels=llabels,
                                                 path_file=pf_insample_unw.replace("_in_", "_both_"))
         elif run == "deployed":
             if dataset_name == "synth":
-                llabels = ["unweighted - Biased data", "weighted - Biased data", "Oracle - whole data"]
+                llabels = ["unweighted - Biased data", "weighted - Biased data", "Oracle - target data"]
             else:
                 llabels = ["unweighted - {}".format(state2), "weighted - {}".format(state2), "{} - Oracle".format(state2)]
             plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=df_in_te["weight"], path_file=pf_insample_unw)
             plot_and_save_weighted_pdp(clf_oracle, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
-            multiple_plot_and_save_weighted_pdp([clf, clf, clf_oracle], [df_ood[atts], df_ood[atts], df_ood[atts]],
-                                                [col], weight_column=[None, df_ood["weight"], None],
+            multiple_plot_and_save_weighted_pdp([clf, clf, clf_oracle], [df_in_te[atts], df_in_te[atts], df_ood[atts]],
+                                                [col], weight_column=[None, df_in_te["weight"], None],
                                                 list_labels=llabels,
                                                 path_file=pf_insample_unw.replace("_in_", "_both_"))
+
 
 
 def plot_and_save_weighted_pdp(clf, X, columns_of_interest: list, weight_column: pd.Series = None,
@@ -398,7 +410,7 @@ def multiple_plot_and_save_weighted_pdp(clf: list, X: list, columns_of_interest:
         # close with current plot
         plt.clf()
 
-def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", state2="PR"):
+def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", state2="OH"):
     """
     Main function to run the experiments
     """
@@ -408,8 +420,8 @@ def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=str, default="folktables")
-    parser.add_argument("--model", type=str, default="xgb")
+    parser.add_argument("--data", type=str, default="synth")
+    parser.add_argument("--model", type=str, default="lgbm")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--sw", type=float, default=0.10)
     parser.add_argument("--state1", type=str, default="CA")
@@ -422,3 +434,4 @@ if __name__ == "__main__":
     state1 = args.state1
     state2 = args.state2
     main(dataset_name=dataset, classifier=model, seed=seed, sw=sw, state1=state1, state2=state2)
+

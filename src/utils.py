@@ -29,9 +29,6 @@ def set_seed(seed=None):
     :param seed_torch: if True, sets the random seed for pytorch. Default: True.
     :return:
     """
-    if seed is None:
-        np.random.seed(42)
-        seed = np.random.choice(2**32)
     random.seed(seed)
     np.random.seed(seed)
     print(f"Random seed {seed} has been set.")
