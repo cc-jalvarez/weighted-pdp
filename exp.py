@@ -113,7 +113,7 @@ def train_model(df_in_tr, atts, model_type='xgb', weight_column=None, seed=42):
         clf.fit(df_in_tr[atts], df_in_tr["TARGET"])
     return clf
 
-def get_weights(df_s, df_t, var_sel, bins: int or np.array = 5):
+def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10):
     """
     Get the weights for the source dataset
     these are the weights that are used to reweight the source dataset to look like the target dataset
@@ -153,10 +153,10 @@ def get_weights(df_s, df_t, var_sel, bins: int or np.array = 5):
     Pr[s = 1] can be estimated by the quantity |S|/|U|. However, since Pr[s = 1] is a
     constant independent of x, its estimation is not even necessary.
     """
-    denonminator = counts_source/counts_target
-    numerator = total_source/total_target
+    denonminator = counts_source/(counts_target+1e-8)
+    numerator = total_source/(total_target +1e-8)
     # get the weights
-    weights = numerator/denonminator
+    weights = numerator/(denonminator+1e-8)
     sum_weights = np.sum(weights)
     dict_map = {q: w for q, w in zip(np.unique(binned_source), weights/sum_weights)}
     df_s["weight"] = binned_source
@@ -169,7 +169,9 @@ def get_weights(df_s, df_t, var_sel, bins: int or np.array = 5):
 
 
 def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
-                  state1: str = "CA", state2: str = "PR", run = "unweighted"):
+                  state1: str = "CA", state2: str = "PR", run = "unweighted",
+                  img_fold = "C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot",
+                  bins: int or np.array = 10):
     """
     Test the model and plot the results
     dataset_name: str - name of the dataset to use
@@ -195,7 +197,7 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
     else:
         raise ValueError("Dataset name not recognized")
     if run == "sandbox":
-        df_in_tr, bins_ = get_weights(df_in_tr, df_ood, var_sel)
+        df_in_tr, bins_ = get_weights(df_in_tr, df_ood, var_sel, bins=bins)
         clf = train_model(df_in_tr, atts, model_type=classifier,
                           seed=seed, weight_column=df_in_tr["weight"])
         tmp = df_in_tr[["occ", "weight"]].copy().groupby(["occ"], as_index=False).mean().reset_index()
@@ -207,7 +209,7 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         clf_oracle = train_model(df_ood, atts, model_type=classifier,
                                  seed=seed)
     elif run == "deployed":
-        df_in_tr, bins_ = get_weights(df_in_tr, df_ood, var_sel)
+        df_in_tr, bins_ = get_weights(df_in_tr, df_ood, var_sel, bins=bins)
         clf = train_model(df_in_tr, atts, model_type=classifier,
                           seed=seed, weight_column=None)
         tmp = df_in_tr[["occ", "weight"]].copy().groupby(["occ"], as_index=False).mean().reset_index()
@@ -249,13 +251,13 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         os.mkdir("plots")
     res.to_csv("results/{}/results_{}_{}.csv".format(dataset_name,clf.__class__.__name__, run), index=False)
     for col in columns_of_interest:
-        pf_insample_unw = "C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\{}_{}_{}_{}_in_{}.png".format(clf.__class__.__name__,
-                                                               dataset_name, sw, col, run)
-        pf_ood_unw = "C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\{}_{}_{}_{}_ood_{}.png".format(clf.__class__.__name__,
-                                                           dataset_name, sw, col, run)
+        pf_insample_unw = "{}/plots/{}_{}_{}_{}_in_{}_nbins{}.png".format(img_fold, clf.__class__.__name__,
+                                                               dataset_name, sw, col, run, bins)
+        pf_ood_unw = "{}/plots/{}_{}_{}_{}_ood_{}_nbins{}.png".format(img_fold, clf.__class__.__name__,
+                                                           dataset_name, sw, col, run, bins)
         if run == "unweighted":
-            plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=None, path_file=pf_insample_unw)
-            plot_and_save_weighted_pdp(clf, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
+            # plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=None, path_file=pf_insample_unw)
+            # plot_and_save_weighted_pdp(clf, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
             multiple_plot_and_save_weighted_pdp([clf, clf_oracle], [df_in_te[atts], df_ood[atts]], [col], weight_column=None,
                                                 list_labels=llabels,
                                                 path_file=pf_insample_unw.replace("_in_", "_both_"))
@@ -265,10 +267,10 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
             else:
                 llabels = ["unweighted - {}".format(state2), "weighted - {}".format(state2), "{} - Oracle".format(state2)]
             # try:
-            plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=df_in_te["weight"], path_file=pf_insample_unw)
+            # plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=df_in_te["weight"], path_file=pf_insample_unw)
             # except: import pdb; pdb.set_trace()
-            plot_and_save_weighted_pdp(clf, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
-            multiple_plot_and_save_weighted_pdp([clf, clf, clf_oracle], [df_in_te[atts], df_in_te[atts], df_ood[atts]],
+            # plot_and_save_weighted_pdp(clf, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
+            multiple_plot_and_save_weighted_pdp([clf, clf, clf], [df_in_te[atts], df_in_te[atts], df_ood[atts]],
                                                 [col], weight_column=[None, df_in_te["weight"], None],
                                                 list_labels=llabels,
                                                 path_file=pf_insample_unw.replace("_in_", "_both_"))
@@ -277,9 +279,9 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
                 llabels = ["unweighted - Biased data", "weighted - Biased data", "Oracle - target data"]
             else:
                 llabels = ["unweighted - {}".format(state2), "weighted - {}".format(state2), "{} - Oracle".format(state2)]
-            plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=df_in_te["weight"], path_file=pf_insample_unw)
-            plot_and_save_weighted_pdp(clf_oracle, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
-            multiple_plot_and_save_weighted_pdp([clf, clf, clf_oracle], [df_in_te[atts], df_in_te[atts], df_ood[atts]],
+            # plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=df_in_te["weight"], path_file=pf_insample_unw)
+            # plot_and_save_weighted_pdp(clf_oracle, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
+            multiple_plot_and_save_weighted_pdp([clf, clf, clf], [df_in_te[atts], df_in_te[atts], df_ood[atts]],
                                                 [col], weight_column=[None, df_in_te["weight"], None],
                                                 list_labels=llabels,
                                                 path_file=pf_insample_unw.replace("_in_", "_both_"))
@@ -410,13 +412,13 @@ def multiple_plot_and_save_weighted_pdp(clf: list, X: list, columns_of_interest:
         # close with current plot
         plt.clf()
 
-def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", state2="OH"):
+def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", state2="OH", bins=10):
     """
     Main function to run the experiments
     """
     test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="unweighted")
-    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="sandbox")
-    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="deployed")
+    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="sandbox", bins=bins)
+    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="deployed", bins=bins)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -425,7 +427,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--sw", type=float, default=0.10)
     parser.add_argument("--state1", type=str, default="CA")
-    parser.add_argument("--state2", type=str, default="PR")
+    parser.add_argument("--state2", type=str, default="OH")
+    parser.add_argument("--bins", type=int, default=10)
     args = parser.parse_args()
     dataset = args.data
     model = args.model
