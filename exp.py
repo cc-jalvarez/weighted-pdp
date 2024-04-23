@@ -1,6 +1,6 @@
 import sklearn.base
 from xgboost import XGBClassifier
-from folktables import ACSDataSource, ACSIncome
+from folktables import ACSDataSource, ACSPublicCoverage, ACSIncome
 from src.utils import set_seed
 from src import _partial_dependence_weighted as pdw
 from sklearn.linear_model import LogisticRegression
@@ -16,9 +16,9 @@ import pandas as pd
 import random
 import os
 import argparse
+from joblib import dump, load
 
 #settings for the plots
-plt.style.use('seaborn-whitegrid')
 plt.rc('font', size=16)
 plt.rc('legend', fontsize=16)
 plt.rc('lines', linewidth=2)
@@ -63,8 +63,8 @@ def get_data(filename, seed: int = 42, synth_weight: float = 0.10, state1 = "CA"
         ax.hist(df_in_tr["AGEP"], alpha=1, label="{} Sample".format(state1))
         ax.hist(df_ood["AGEP"], alpha=.5, label="{} Sample".format(state2))
         ax.legend()
-        ax.set_title("Age distribution in CA and PR")
-        plt.savefig("C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\flktables_{}{}_agedistr.png".format(state1, state2), dpi=300, bbox_inches='tight')
+        ax.set_title("Age distribution in {} and {}".format(state1, state2))
+        plt.savefig("plots/flktables_{}{}_agedistr.png".format(state1, state2), dpi=300, bbox_inches='tight')
     elif filename == "synth":
         X, y = make_classification(n_samples=10000, n_features=10, n_informative=2, n_redundant=0, random_state=seed)
         #add a sample selection method
@@ -83,7 +83,8 @@ def get_data(filename, seed: int = 42, synth_weight: float = 0.10, state1 = "CA"
         ax.hist(df_ood["X0"], alpha=.5, label="True Distribution")
         ax.legend()
         ax.set_title("X0 distribution in training and true data - sw={}".format(synth_weight))
-        plt.savefig("C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot\\plots\\synth_data_{}.png".format(synth_weight), dpi=300, bbox_inches='tight')
+        plt.savefig("plots/synth_data_{}.png".format(synth_weight), dpi=300, bbox_inches='tight')
+
     return df_in_tr, df_in_te, df_ood, atts
 
 
@@ -113,7 +114,7 @@ def train_model(df_in_tr, atts, model_type='xgb', weight_column=None, seed=42):
         clf.fit(df_in_tr[atts], df_in_tr["TARGET"])
     return clf
 
-def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10):
+def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10, dataset_name="synth"):
     """
     Get the weights for the source dataset
     these are the weights that are used to reweight the source dataset to look like the target dataset
@@ -129,39 +130,28 @@ def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10):
     else:
         bins_ = bins
     # get the bins for the source dataset
-    binned_source = np.digitize(df_s[var_sel], bins=bins_)
-    binned_target = np.digitize(df_t[var_sel], bins=bins_)
-    # check if the bins are the same
-    if binned_source.max() < binned_target.max():
-        limit = binned_target.max() - binned_source.max()
-        bins_ = bins_[:-limit]
-        binned_target = np.digitize(df_t[var_sel], bins=bins_)
-    if binned_source.min() < binned_target.min():
-        limit = binned_target.min() - binned_source.min()
-        bins_ = bins_[limit:]
+    # if dataset_name == "synthV2":
+    if "synth" in dataset_name:
+        binned_source = np.digitize(df_s[var_sel], bins=np.linspace(-4, 4, bins))
+        binned_target = np.digitize(df_t[var_sel], bins=np.linspace(-4, 4, bins))
+        dict_source = {i: 0 for i, q in enumerate(np.linspace(-4, 4, bins))}
+        dict_target = {i: 0 for i, q in enumerate(np.linspace(-4, 4, bins))}
+    else:
         binned_source = np.digitize(df_s[var_sel], bins=bins_)
-    # get the relative weights for the source dataset
-    counts_source = np.unique(binned_source, return_counts=True)[1]
-    counts_target = np.unique(binned_target, return_counts=True)[1]
-    total_source = np.sum(counts_source)
-    total_target = np.sum(counts_target)
-    # norm_weight_source = P(S=1|X_bin)
-    """
-    A simple case is when the points are defined over a discrete set.
-    Pr[s = 1|x] can then be estimated from the frequency mx/nx, where mx denotes the number of times
-    x appeared in S ⊆ U and nx the number of times x appeared in the full data set U.
-    Pr[s = 1] can be estimated by the quantity |S|/|U|. However, since Pr[s = 1] is a
-    constant independent of x, its estimation is not even necessary.
-    """
-    denonminator = counts_source/(counts_target+1e-8)
-    numerator = total_source/(total_target +1e-8)
-    # get the weights
-    weights = numerator/(denonminator+1e-8)
-    sum_weights = np.sum(weights)
-    dict_map = {q: w for q, w in zip(np.unique(binned_source), weights/sum_weights)}
+        binned_target = np.digitize(df_t[var_sel], bins=bins_)
+        dict_source = {i: 0 for i, q in enumerate(bins_)}
+        dict_target = {i: 0 for i, q in enumerate(bins_)}
+    for i, q in enumerate(dict_source.keys()):
+        dict_source[q] = np.sum(np.where(binned_source == i, 1, 0))
+        dict_target[q] = np.sum(np.where(binned_target == i, 1, 0))
+    dict_weights = {q: (dict_target[q] / dict_source[q]) * (sum(dict_source.values()) / (sum(dict_target.values())))
+    if dict_source[q] > 0 else 1 for q in dict_source.keys()}
     df_s["weight"] = binned_source
     df_s["occ"] = binned_source
-    df_s["weight"] = df_s["weight"].map(dict_map)
+    df_s["weight"] = df_s["weight"].map(dict_weights)
+    total_weight = sum(dict_source.values()) / (sum(dict_target.values()))
+    df_s["weight"] = df_s["weight"].fillna(total_weight)
+    print(np.unique(df_s["weight"], return_counts=True))
     return df_s, bins_
 
 
@@ -170,7 +160,7 @@ def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10):
 
 def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
                   state1: str = "CA", state2: str = "PR", run = "unweighted",
-                  img_fold = "C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot",
+                  img_fold = "",
                   bins: int or np.array = 10):
     """
     Test the model and plot the results
@@ -184,20 +174,34 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
     """
     set_seed(seed)
     df_in_tr, df_in_te, df_ood, atts = get_data(dataset_name, seed=seed, synth_weight=sw, state1=state1, state2=state2)
-    if dataset_name == "synth":
+    if "synth" in dataset_name:
         columns_of_interest = ["X0", "X1"]
         llabels = ["{} - Biased data".format((classifier).upper()),
                    "{} - True data".format((classifier).upper())]
         var_sel = "X0"
     elif dataset_name == "folktables":
-        columns_of_interest = ['MAR', 'SCHL']
+        data_source = ACSDataSource(survey_year="2017", horizon="1-Year", survey="person")
+        ca_data = data_source.get_data(states=[state2], download=True)
+        # features, label, group = ACSEmployment.df_to_numpy(acs_data)
+        ca_features, ca_labels, ca_group = ACSIncome.df_to_pandas(ca_data)
+        ca_features = ca_features.drop(columns="RAC1P")
+        ca_features["group"] = ca_group
+        df_ood_ly = ca_features.copy()
+        df_ood_ly["TARGET"] = ca_labels.astype(int)
+        columns_of_interest = ['MAR', 'SCHL', 'AGEP']
         llabels = ["{} - {}".format((classifier).upper(), state1),
                    "{} - {}".format((classifier).upper(), state2)]
         var_sel = "AGEP"
     else:
         raise ValueError("Dataset name not recognized")
     if run == "sandbox":
-        df_in_tr, bins_ = get_weights(df_in_tr, df_ood, var_sel, bins=bins)
+        if dataset_name == "folktables":
+            df_in_tr, bins_ = get_weights(df_in_tr, df_ood_ly, var_sel, bins=bins, dataset_name=dataset_name)
+            print(df_in_tr["weight"].isna().sum())
+            print(bins_)
+
+        else:
+            df_in_tr, bins_ = get_weights(df_in_tr, df_ood, var_sel, bins=bins)
         clf = train_model(df_in_tr, atts, model_type=classifier,
                           seed=seed, weight_column=df_in_tr["weight"])
         tmp = df_in_tr[["occ", "weight"]].copy().groupby(["occ"], as_index=False).mean().reset_index()
@@ -205,11 +209,18 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         df_in_te = df_in_te.merge(tmp, on="occ", how="left")
         print(df_in_tr["weight"].isna().sum())
         print(df_in_te["weight"].isna().sum())
+        if df_in_tr["weight"].isna().sum() == 0:
+            min_weight = df_in_tr["weight"].max()
+            df_in_te["weight"] = np.where(df_in_te["weight"].isna(), min_weight, df_in_te["weight"])
+            print(df_in_te["weight"].isna().sum())
         # print(df_ood["weight"].isna().sum())
         clf_oracle = train_model(df_ood, atts, model_type=classifier,
                                  seed=seed)
     elif run == "deployed":
-        df_in_tr, bins_ = get_weights(df_in_tr, df_ood, var_sel, bins=bins)
+        if dataset_name == "folktables":
+            df_in_tr, bins_ = get_weights(df_in_tr, df_ood_ly, var_sel, bins=bins)
+        else:
+            df_in_tr, bins_ = get_weights(df_in_tr, df_ood, var_sel, bins=bins)
         clf = train_model(df_in_tr, atts, model_type=classifier,
                           seed=seed, weight_column=None)
         tmp = df_in_tr[["occ", "weight"]].copy().groupby(["occ"], as_index=False).mean().reset_index()
@@ -217,6 +228,10 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         df_in_te = df_in_te.merge(tmp, on="occ", how="left")
         print(df_in_tr["weight"].isna().sum())
         print(df_in_te["weight"].isna().sum())
+        if df_in_tr["weight"].isna().sum() == 0:
+            min_weight = df_in_tr["weight"].max()
+            df_in_te["weight"] = np.where(df_in_te["weight"].isna(), min_weight, df_in_te["weight"])
+            print(df_in_te["weight"].isna().sum())
         # print(df_ood["weight"].isna().sum())
         clf_oracle = train_model(df_ood, atts, model_type=classifier,
                                  seed=seed)
@@ -249,21 +264,29 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
         os.mkdir("results/{}".format(dataset_name))
     if not os.path.exists("plots"):
         os.mkdir("plots")
+    if not os.path.exists("plots/{}".format(dataset_name)):
+        os.mkdir("plots/{}".format(dataset_name))
     res.to_csv("results/{}/results_{}_{}.csv".format(dataset_name,clf.__class__.__name__, run), index=False)
     for col in columns_of_interest:
-        pf_insample_unw = "{}/plots/{}_{}_{}_{}_in_{}_nbins{}.png".format(img_fold, clf.__class__.__name__,
+        if dataset_name == "folktables":
+            pf_insample_unw = "{}plots/{}/{}_{}_{}_{}_in_{}_nbins{}.png".format(img_fold, dataset_name, clf.__class__.__name__,
+                                                                   dataset_name, state1+"-"+state2, col, run, bins)
+            pf_ood_unw = "{}plots/{}/{}_{}_{}_{}_ood_{}_nbins{}.png".format(img_fold, dataset_name, clf.__class__.__name__,
+                                                                dataset_name, state1+"-"+state2, col, run, bins)
+        else:
+            pf_insample_unw = "{}plots/{}/{}_{}_{}_{}_in_{}_nbins{}.png".format(img_fold, dataset_name, clf.__class__.__name__,
+                                                                   dataset_name, sw, col, run, bins)
+            pf_ood_unw = "{}plots/{}/{}_{}_{}_{}_ood_{}_nbins{}.png".format(img_fold, dataset_name, clf.__class__.__name__,
                                                                dataset_name, sw, col, run, bins)
-        pf_ood_unw = "{}/plots/{}_{}_{}_{}_ood_{}_nbins{}.png".format(img_fold, clf.__class__.__name__,
-                                                           dataset_name, sw, col, run, bins)
         if run == "unweighted":
             # plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=None, path_file=pf_insample_unw)
             # plot_and_save_weighted_pdp(clf, df_ood[atts], [col], weight_column=None, path_file=pf_ood_unw)
             multiple_plot_and_save_weighted_pdp([clf, clf_oracle], [df_in_te[atts], df_ood[atts]], [col], weight_column=None,
                                                 list_labels=llabels,
-                                                path_file=pf_insample_unw.replace("_in_", "_both_"))
+                                                path_file=pf_insample_unw.replace("_in_", "_both_"), title=run)
         elif run == "sandbox":
-            if dataset_name == "synth":
-                llabels = ["unweighted - Biased data", "weighted - Biased data", "Oracle - target data"]
+            if "synth" in dataset_name:
+                llabels = ["unweighted - source data", "weighted - source data", "Oracle - target data"]
             else:
                 llabels = ["unweighted - {}".format(state2), "weighted - {}".format(state2), "{} - Oracle".format(state2)]
             # try:
@@ -273,10 +296,10 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
             multiple_plot_and_save_weighted_pdp([clf, clf, clf], [df_in_te[atts], df_in_te[atts], df_ood[atts]],
                                                 [col], weight_column=[None, df_in_te["weight"], None],
                                                 list_labels=llabels,
-                                                path_file=pf_insample_unw.replace("_in_", "_both_"))
+                                                path_file=pf_insample_unw.replace("_in_", "_both_"), title=run)
         elif run == "deployed":
-            if dataset_name == "synth":
-                llabels = ["unweighted - Biased data", "weighted - Biased data", "Oracle - target data"]
+            if "synth" in dataset_name:
+                llabels = ["unweighted - source data", "weighted - source data", "Oracle - target data"]
             else:
                 llabels = ["unweighted - {}".format(state2), "weighted - {}".format(state2), "{} - Oracle".format(state2)]
             # plot_and_save_weighted_pdp(clf, df_in_te[atts], [col], weight_column=df_in_te["weight"], path_file=pf_insample_unw)
@@ -284,12 +307,12 @@ def test_and_plot(dataset_name, classifier, seed: int = 42, sw: float = 0.10,
             multiple_plot_and_save_weighted_pdp([clf, clf, clf], [df_in_te[atts], df_in_te[atts], df_ood[atts]],
                                                 [col], weight_column=[None, df_in_te["weight"], None],
                                                 list_labels=llabels,
-                                                path_file=pf_insample_unw.replace("_in_", "_both_"))
+                                                path_file=pf_insample_unw.replace("_in_", "_both_"), title=run)
 
 
 
 def plot_and_save_weighted_pdp(clf, X, columns_of_interest: list, weight_column: pd.Series = None,
-                               path_file: str = "default.png"):
+                               path_file: str = "default.png", title: str = "default"):
     """
     Plot and save the weighted PDP
     clf: sklearn.base.BaseEstimator - classifier to use
@@ -338,7 +361,7 @@ def plot_and_save_weighted_pdp(clf, X, columns_of_interest: list, weight_column:
         # to be changed?
         ax.set_xlabel(theme_var.split('_')[0] + ' theme $t$')
         ax.set_ylabel('$\hat{b}_T (t)$')
-        # plt.title('PDP for {} theme'.format(theme_var.split('_')[0]))
+        plt.title(title)
         # ax.set_xlim(X[theme_var].min() -0.01, X[theme_var].max() +0.01)
         # plt.ylim([0, np.max(pd_lg['average'] + pd_lr['average'])[0].round(1) + 0.25])
         # ax.set_ylim([pd_clf['average'][0].min().round(1) - 0.05, pd_clf['average'][0].max().round(1) + 0.05])
@@ -352,7 +375,7 @@ def plot_and_save_weighted_pdp(clf, X, columns_of_interest: list, weight_column:
 def multiple_plot_and_save_weighted_pdp(clf: list, X: list, columns_of_interest: list,
                                         weight_column: list = None,
                                         list_labels = ["CA", "PR"],
-                                        path_file: str = "default.png"):
+                                        path_file: str = "default.png", title: str = "default"):
     """
     Plot and save the weighted PDP
     clf: list - list of classifiers to use
@@ -376,6 +399,7 @@ def multiple_plot_and_save_weighted_pdp(clf: list, X: list, columns_of_interest:
         # to get the full range of X vals:
 
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        all_pd_clf = pd.DataFrame()
         for j, db in enumerate(X):
             grid_res = len(db[theme_var].unique()) + 1
             # calculate PD for both classifiers
@@ -396,39 +420,60 @@ def multiple_plot_and_save_weighted_pdp(clf: list, X: list, columns_of_interest:
             del temp_delta_pdp
             # create and save plot
             ax.plot(pd_clf['values'][0], pd_clf['average'][0], label = list_labels[j])
+            tmp_ = pd.DataFrame()
+            tmp_['Theme'] = [theme_var.split('_')[0]]
+            tmp_["min"] = pd_clf['average'][0].min()
+            tmp_["max"] = pd_clf['average'][0].max()
+            all_pd_clf = pd.concat([all_pd_clf, tmp_], axis=0)
             # plt.plot(pd_lr['values'][0], pd_lr['average'][0], label='LR')
         ax.legend()
         # to be changed?
         ax.set_xlabel(theme_var.split('_')[0] + ' theme $t$')
         ax.set_ylabel('$\hat{b}_T (t)$')
-        # plt.title('PDP for {} theme'.format(theme_var.split('_')[0]))
+        plt.title(title)
         ax.set_xlim(db[theme_var].min() - 0.01, db[theme_var].max() + 0.01)
         # plt.ylim([0, np.max(pd_lg['average'] + pd_lr['average'])[0].round(1) + 0.25])
-        ax.set_ylim([pd_clf['average'][0].min().round(1) - 0.05, pd_clf['average'][0].max().round(1) + 0.05])
+        ax.set_ylim([all_pd_clf['min'].min() - .05, all_pd_clf['max'].max() + 0.05])
         # save
         plt.savefig(fname=path_file,
                     bbox_inches='tight',
                     dpi=300)
         # close with current plot
-        plt.clf()
+        plt.close(fig)
 
 def main(dataset_name="synth", classifier="xgb", seed=42, sw=0.10, state1="CA", state2="OH", bins=10):
     """
     Main function to run the experiments
     """
-    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="unweighted")
-    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="sandbox", bins=bins)
-    test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="deployed", bins=bins)
+    # C:\\Users\\andre\\Dropbox\\Applicazioni\\Overleaf\\ECAI24 _ The weighted partial dependence plot
+    # test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="unweighted")
+    if dataset_name == "all_folktables":
+        furthest_pairs = [('KY', 'VT'), ('VT', 'KY'), ('TX', 'VT'), ('VT', 'TX'), ('CA', 'VT'), ('VT', 'CA')]
+        for pair in furthest_pairs:
+            test_and_plot("folktables", classifier, seed=seed, sw=sw, state1=pair[0], state2=pair[1], run="sandbox", bins=bins)
+            test_and_plot("folktables", classifier, seed=seed, sw=sw, state1=pair[0], state2=pair[1], run="deployed", bins=bins)
+        closest_pairs = [('IN', 'NC'), ('NC', 'IN'), ('AZ', 'VA'), ('VA', 'AZ'), ('IN', 'VA'), ('VA', 'IN')]
+        for pair in closest_pairs:
+            test_and_plot("folktables", classifier, seed=seed, sw=sw, state1=pair[0], state2=pair[1], run="sandbox", bins=bins)
+            test_and_plot("folktables", classifier, seed=seed, sw=sw, state1=pair[0], state2=pair[1], run="deployed", bins=bins)
+    elif dataset_name == "all_synth":
+        for sw in [0.05, 0.10, 0.25, 0.50]:
+            for bins in [5, 10, 20]:
+                test_and_plot("synth", classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="sandbox", bins=bins)
+                test_and_plot("synth", classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="deployed", bins=bins)
+    else:
+        test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="sandbox", bins=bins)
+        test_and_plot(dataset_name, classifier, seed=seed, sw=sw, state1=state1, state2=state2, run="deployed", bins=bins)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=str, default="synth")
+    parser.add_argument("--data", type=str, default="folktables")
     parser.add_argument("--model", type=str, default="lgbm")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--sw", type=float, default=0.10)
     parser.add_argument("--state1", type=str, default="CA")
     parser.add_argument("--state2", type=str, default="OH")
-    parser.add_argument("--bins", type=int, default=10)
+    parser.add_argument("--bins", type=int, default=20)
     args = parser.parse_args()
     dataset = args.data
     model = args.model
@@ -436,5 +481,6 @@ if __name__ == "__main__":
     sw = args.sw
     state1 = args.state1
     state2 = args.state2
-    main(dataset_name=dataset, classifier=model, seed=seed, sw=sw, state1=state1, state2=state2)
+    bins = args.bins
+    main(dataset_name=dataset, classifier=model, seed=seed, sw=sw, state1=state1, state2=state2, bins=bins)
 

@@ -1,18 +1,10 @@
 import statistics
 from scipy import stats
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
-from sklearn.pipeline import Pipeline
-from lightgbm import LGBMClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.linear_model import LogisticRegression
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-from sklearn.metrics import average_precision_score, precision_recall_curve, auc
-from sklearn.model_selection import StratifiedKFold
-import optuna
-import optuna.integration.lightgbm as lgb
+import pandas as pd
+import os
+import folktables as ft
+from sklearn.model_selection import train_test_split
+import lightgbm as lgb
 # from pytorch_tabnet.tab_model import TabNetClassifier
 import random
 import numpy as np
@@ -32,6 +24,122 @@ def set_seed(seed=None):
     random.seed(seed)
     np.random.seed(seed)
     print(f"Random seed {seed} has been set.")
+
+states = sorted(['AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI',
+                 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI',
+                 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC',
+                 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT',
+                 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'])
+
+# categorical attributes
+cat_atts = ['SCHL', 'MAR', 'SEX',  'DIS', 'ESP', 'CIT', 'MIG', 'MIL', 'ANC',
+            'NATIVITY', 'DEAR', 'DEYE', 'DREM', 'ESR', 'ST', 'FER', 'RAC1P']
+
+
+# subset of attributes: subset1 is the one used in the paper
+def get_attributes(subset='all'):
+    if subset == 'subset1':
+        atts = ['SCHL', 'MAR', 'AGEP', 'SEX', 'RAC1P']
+    elif subset == 'subset2':
+        atts = ['AGEP', 'SEX', 'RAC1P']
+    elif subset == 'cat':
+        atts = cat_atts
+    else:
+        atts = ft.ACSPublicCoverage.features
+    return atts
+
+
+# data split into training and test
+def split_data(X, y, test_size=0.25, random_state=42):
+    x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)
+    return x_train, x_test, y_train, y_test
+
+
+# load folktables state data
+def load_folktables_data(state, survey_year='2017', horizon='1-Year', survey='person'):
+    # add check for data, so it doesn't need to download
+    root_dir = ""
+    state_codes = pd.read_csv(os.path.join(root_dir, 'data', 'state_codes.csv'))
+    # To avoid downloading each time, check per state if downloaded, if not, download
+    # Either way, append the state data to acs_data data frame, updating the region field
+    # get state code
+    code = state_codes.loc[state_codes['USPS'] == state]['numeric'].values[0]
+    data_path = os.path.join(root_dir, "data", survey_year, horizon, f"psam_p{code}.csv")
+    # This file path works with person, not household survey
+    if os.path.exists(data_path):
+        print(data_path)
+        # load from csv, update to region == i, append to acs_data
+        state_data = pd.read_csv(data_path)
+    else:
+        # download that state (and save in .csv format)
+        data_source = ft.ACSDataSource(survey_year=survey_year, horizon=horizon, survey=survey,
+                                       root_dir=os.path.join(root_dir, 'data'))
+        state_data = data_source.get_data(states=[state], download=True)
+    return state_data
+
+
+# load and split data about states
+def load_ACSPublicCoverage(subset, states=states, year="2017"):
+    # Dictionaries mapping states to train-test data
+    X_train_s, X_test_s, y_train_s, y_test_s = dict(), dict(), dict(), dict()
+    task_method = ft.ACSPublicCoverage
+    for s in states:
+        print(s, end=' ')
+        source_data = load_folktables_data(s, year, '1-Year', 'person')
+        features_s, labels_s, group_s = task_method.df_to_numpy(source_data)
+        X_s = pd.DataFrame(features_s, columns=task_method.features)
+        X_s['y'] = labels_s
+        y_s = X_s['y']
+        X_s = X_s[subset]
+        X_train_s[s], X_test_s[s], y_train_s[s], y_test_s[s] = split_data(X_s, y_s)
+    # Target is same as source, because in the same year
+    X_train_t, X_test_t, y_train_t, y_test_t = X_train_s, X_test_s, y_train_s, y_test_s
+    return X_train_s, X_test_s, y_train_s, y_test_s, X_train_t, X_test_t, y_train_t, y_test_t
+
+def load_ACSIncome(subset, states=states, year="2017"):
+    # Dictionaries mapping states to train-test data
+    X_train_s, X_test_s, y_train_s, y_test_s = dict(), dict(), dict(), dict()
+    task_method = ft.ACSIncome
+    for s in states:
+        print(s, end=' ')
+        source_data = load_folktables_data(s, year, '1-Year', 'person')
+        features_s, labels_s, group_s = task_method.df_to_numpy(source_data)
+        X_s = pd.DataFrame(features_s, columns=task_method.features)
+        X_s['y'] = labels_s
+        y_s = X_s['y']
+        X_s = X_s[subset]
+        X_train_s[s], X_test_s[s], y_train_s[s], y_test_s[s] = split_data(X_s, y_s)
+    # Target is same as source, because in the same year
+    X_train_t, X_test_t, y_train_t, y_test_t = X_train_s, X_test_s, y_train_s, y_test_s
+    return X_train_s, X_test_s, y_train_s, y_test_s, X_train_t, X_test_t, y_train_t, y_test_t
+
+# extract metrics from confusion matrix
+def cm_metrics(cm):
+    TN, FP, FN, TP = cm.ravel()
+    N = TP + FP + FN + TN  # Total population
+    ACC = (TP + TN) / N    # Accuracy
+    TPR = TP / (TP + FN)   # True positive rate
+    FPR = FP / (FP + TN)   # False positive rate
+    FNR = FN / (TP + FN)   # False negative rate
+    PPP = (TP + FP) / N    # % predicted as positive
+    return [ACC, TPR, FPR, FNR, PPP]
+
+
+# calculate accuracy and fairness metrics
+def get_metric(r, m):
+    # accuracy - the higher the better
+    if m == 'acc':
+        return cm_metrics(r['cm'])[0]
+    # equal accuracy - the smaller the better
+    if m == 'eqacc':
+        return abs(cm_metrics(r['cm_protected'])[0] - cm_metrics(r['cm_unprotected'])[0])
+    # equality of opportunity - the smaller the better
+    if m == 'eop':
+        return abs(cm_metrics(r['cm_protected'])[1] - cm_metrics(r['cm_unprotected'])[1])
+    # demographic parity - the smaller the better
+    if m == 'dp':
+        return abs(cm_metrics(r['cm_protected'])[4] - cm_metrics(r['cm_unprotected'])[4])
+    raise "unknown metric"
 
 class KNeighborsClassifierW(KNeighborsClassifier):
 
@@ -83,7 +191,7 @@ class KNeighborsClassifierW(KNeighborsClassifier):
             #print(weights.shape)
             #print(weights[1,:])
         """ end """
-        
+
         y_pred = np.empty((n_queries, n_outputs), dtype=classes_[0].dtype)
         for k, classes_k in enumerate(classes_):
             if weights is None:
@@ -170,286 +278,3 @@ def ci_auc_l(res):
 def ci_auc_u(res):
     return ci_auc(res)[3]
 
-#Build the object function in such a way that can receive explicit parameters
-#https://optuna.readthedocs.io/en/latest/faq.html#how-to-define-objective-functions-that-have-own-arguments
-
-optuna.logging.set_verbosity(0)
-   
-class Objective(object):
-    
-    def __init__(self, clf_name, categorical_columns, trial_cv, X, y, W):
-        
-        """
-        clf_name (string)
-        X indipendent features of df
-        y dipendent features of df
-        X and y are derived from the same train folds when we use stratified 10-fold cross validation
-        """
-          
-        self.clf_name = clf_name
-        self.categorical_columns = categorical_columns
-        self.trial_cv = trial_cv
-        self.X = X
-        self.y = y
-        self.W = W        
-        
-    def __call__(self, trial):
-
-        """
-        the function structures the hyperparameter optimization for the classifier
-        evaluates the model with cross validation, we want to maximize AUPR curve
-        return result = is the mean of the highest AUPR-curve scores for each X
-        """
-        #apply the one hot just to certain columns
-        one_hot_transformer = ColumnTransformer([('onehot', OneHotEncoder(handle_unknown = 'ignore', sparse = False),
-                                         self.categorical_columns)], 
-                                        remainder='passthrough')
-        
-        #pipeline encapsulates all transformations
-        if self.clf_name == "RF":
-            estimator = Pipeline(steps = [
-                      ('one hot', one_hot_transformer),
-                      ('clf', RandomForestClassifier(
-                                        n_estimators = trial.suggest_int('n_estimators', 50, 200),
-                                        max_depth = trial.suggest_int('max_depth', 3, 150),
-                                        n_jobs = -1))])
-        # elif self.clf_name == "TABNET":
-        #     estimator = Pipeline(steps = [
-        #               ('one hot', one_hot_transformer),
-        #               ('clf', TabNetClassifier(
-        #                   #n_d = trial.suggest_int('n_d', 8, 64, log=True),
-        #                   #n_a = trial.suggest_int('n_a', 8, 64, log=True),
-        #                   #n_steps  = trial.suggest_int('n_steps', 3, 10),
-        #                   #gamma  = trial.suggest_float('gamma', 1.0, 2.0),
-        #                   #n_independent  = trial.suggest_int('n_independent', 1, 5),
-        #                   n_shared  = trial.suggest_int('n_shared', 1, 5)
-        #                   #mask_type  = trial.suggest_categorical('mask_type', ['sparsemax', 'entmax'])
-        #                   ))])
-        elif self.clf_name == "DT":
-            estimator = Pipeline(steps = [
-                      ('one hot', one_hot_transformer),
-                  ('clf', DecisionTreeClassifier(max_depth = trial.suggest_int('max_depth', 3, 200)))])
-        elif self.clf_name == "KNN":
-            estimator = Pipeline(steps = [
-                      ('one hot', one_hot_transformer),
-                      ('SC', MinMaxScaler()), # Good practice to use scaler 
-                      ('clf', KNeighborsClassifierW(n_neighbors = trial.suggest_int('n_neighbors', 3, 10)))])
-        
-        elif self.clf_name == "LR":
-            estimator = Pipeline(steps = [
-                  ('one hot', one_hot_transformer),
-                  ('SC', MinMaxScaler()), # Good practice to use scaler in logistic regression
-                  ('clf', LogisticRegression(C = trial.suggest_float("C", 1e-10, 1e10, log=True)))])
-  
-        elif self.clf_name == "XGB":
-            estimator = Pipeline(steps = [
-                  ('one hot', one_hot_transformer),
-                  ('clf', LGBMClassifier(
-                                        n_estimators = trial.suggest_int('n_estimators', 32, 256),
-                                        num_leaves = trial.suggest_int('num_leaves', 5, 100), 
-                                        min_child_weight = trial.suggest_int('min_child_weight', 1, 20),
-                                        scale_pos_weight = trial.suggest_int('scale_pos_weight', 1, 100),
-                                        n_jobs = -1))])
-        elif self.clf_name == "LGBM2":
-            estimator = Pipeline(steps = [
-                  ('one hot', one_hot_transformer),
-                  ('clf', LGBMClassifier(boosting_type='gbdt', 
-                                            objective='binary',
-                                            metric='binary_logloss',
-                                            n_estimators= trial.suggest_int('n_estimators', 32, 256), 
-                                            num_leaves = trial.suggest_int('num_leaves', 5, 100), 
-                                            min_child_samples = trial.suggest_int('min_child_samples', 2, 200),
-                                            lambda_l1 = trial.suggest_float('lambda_l1', 0, 1),
-                                            lambda_l2 = trial.suggest_float('lambda_l2', 0, 1),
-                                            feature_fraction = trial.suggest_float('feature_fraction', 0.5, 1), 
-                                            bagging_fraction = trial.suggest_float('bagging_fraction', 0.5, 1), 
-                                            bagging_freq = trial.suggest_int('bagging_freq', 0, 10), 
-                                            verbose=-1, 
-                                            n_jobs = -1))])
-        """
-        Measure the performance of the chosen classifier + hyperparameters
-        by doing cross-validation and focusing on AUCPR.
-        When we run the test for finding first the best classifier, here
-        X and y are part of the same train folds that we took from stratified 10-fold cross validation
-        
-        """
-        #https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.cross_val_score.html
-        #scores = cross_val_score(estimator = estimator, X = self.X, y = self.y,
-        #                cv = trial_cv, #cv is global variable declared in the exoerment settings cell
-        #                scoring = score_metric) #scoring is global variable declared in the experment settings cell   
-        #result = scores.mean()
-        
-        skf = StratifiedKFold(n_splits = self.trial_cv, shuffle = True, random_state=42)
-        scores = []
-        for train, test in skf.split(self.X, self.y):
-            X_train = self.X.iloc[train]
-            y_train = self.y.iloc[train]
-            sw_train = self.W.iloc[train] if self.W is not None else None
-            X_test = self.X.iloc[test]
-            y_test = self.y.iloc[test]
-            sw_test = self.W.iloc[test] if self.W is not None else None
-            if sw_train is not None:
-                estimator.fit(X_train, y_train, clf__sample_weight=sw_train)
-            else:
-                estimator.fit(X_train, y_train)
-            y_scores = estimator.predict_proba(X_test)[:,1] 
-            avg_pr = average_precision_score(y_test, y_scores, sample_weight=sw_test)
-            # ll = log_loss(y, y_pred, sample_weight=None)
-            scores.append(avg_pr)
-        result = statistics.mean(scores)
-        return result
-		
-#Optuna study normal now can receive parameters
-
-def optuna_study_normal(clf_name, categorical_columns, trial_cv, n_trials, X, y, W):
-    
-    """
-    Here Optuna starts the optimization process.
-    Receive as input
-        clf_name (string)
-        X indipendent features of df
-        y dipendent features of df
-        X and y are derived from the same train folds when we use stratified 10-fold cross validation
-    
-    Returns a dictionary with the df version, the hyps that maximize AUPR-curve, classifier name
-    
-    """
-    
-    if clf_name == "TABNET0":
-        return {'best_hyparams': {}, 'clf_name': clf_name }
-    # Maximize because we are using AUC-PR (higher = better)
-    study = optuna.create_study(direction='maximize') # 
-    
-    # Pass our objective function as parameter to the study
-    #with cross validation, per each fold there is a fixed combination of hyperparam
-    
-    study.optimize(Objective(clf_name, categorical_columns, trial_cv, X, y, W), n_trials = n_trials) #n_trials is a global variable declared in the experiment settings
-    
-    # Create experiment row for the final table
-    experiment_result = {
-                'best_hyparams': study.best_trial.params,
-                'clf_name': clf_name
-    }
-    
-    return experiment_result  
-	
-#Also the Optuna's integration for LightGBM can receive parameters
-
-def optuna_study_lgbm(categorical_columns, trial_cv, X, y, W):
-    
-    """
-    Explicitly take as input global variable:
-    Receive as input
-        clf_name (string)
-        X indipendent features of df
-        y dipendent features of df
-        X and y are derived from the same train folds when we use stratified 10-fold cross validation
-    
-    Optuna will search hyperparameters by optimizing
-    for the binary_logloss instead of the AUC-PR,
-    refer to: https://github.com/optuna/optuna/blob/master/examples/lightgbm_tuner_cv.py
-    for lgbm parameters refer to: https://neptune.ai/blog/lightgbm-parameters-guide
-    
-    Returns a dictionary with the df version, the hyps that maximize AUPR-curve, classifier name
-    """
-    
-    lgb_params = {
-        "objective": "binary",
-        "metric": "binary_logloss", #"average_precision", #"binary_logloss",
-        "verbosity": -1,
-        "boosting_type": "gbdt",
-    }
-    
-    # Create dataset in optuna format
-    # Indicate which are the categorical columns with low cardinality (encoded as integers)
-    lgb_dataset = lgb.Dataset(data = X,
-                              label = y,
-                              weight = W,
-                              categorical_feature = categorical_columns, 
-                              free_raw_data=False)
-    
-    """
-    Hyperparameter tuner for LightGBM with cross-validation.
-    https://optuna.readthedocs.io/en/stable/reference/generated/optuna.integration.lightgbm.LightGBMTunerCV.html
-    
-    tuner is returning the best param for minimizing the binary logloss
-    https://readthedocs.org/projects/optuna/downloads/pdf/stable/
-    https://github.com/optuna/optuna/blob/master/examples/lightgbm_tuner_cv.py
-    """
-    
-    #LightGBMTuner inherited his param settings from lightgbmcv (API from LightGBM no skt compatible)
-    #https://lightgbm.readthedocs.io/en/latest/pythonapi/lightgbm.cv.html
-    #step wise approach
-    tuner = lgb.LightGBMTunerCV(
-        lgb_params, lgb_dataset, verbose_eval=1000, early_stopping_rounds=10, nfold = trial_cv, stratified = 1,
-        categorical_feature = categorical_columns,
-        show_progress_bar = False)
-    
-    tuner.run()
-    
-    experiment_result = {
-                'best_hyparams': tuner.best_params,
-                'clf_name': 'LGBM',
-             }
-    return experiment_result
-
-#Once we have found the best hyperparameters we need to build a model
-def build_model(clf_name, categorical_columns, hyparameters):
-
-        """
-        Receive
-        classifier name (string)
-        hyperparameters is a dictionary of hyperparams found with Optuna.
-        we can access the dictionary with **
-        https://stackoverflow.com/questions/4989850/dictionary-input-of-function-in-python
-        
-        Returns Classifier(**hyparameters)
-        the estimator with its best hyperparameters. Is used  when the classifier is not LightGBM
-        This function is used when we need to test
-        the classifiers on the test set of the 10-stratified cross validation
-
-        """
-        one_hot_transformer = ColumnTransformer([('onehot', OneHotEncoder(handle_unknown = 'ignore', sparse = False),
-                                         categorical_columns)], 
-                                         remainder='passthrough')
-        # if clf_name == "TABNET" or clf_name == "TABNET0":
-        #         estimator = Pipeline(steps = [
-        #               ('one hot', one_hot_transformer),
-        #               ('clf', TabNetClassifier(**hyparameters))])
-        #
-        if clf_name == "RF":
-                estimator = Pipeline(steps = [
-                      ('one hot', one_hot_transformer),
-                      ('clf', RandomForestClassifier(**hyparameters))])
-        
-        elif clf_name == "DT":
-            estimator = Pipeline(steps = [
-                      ('one hot', one_hot_transformer),
-                      ('clf', DecisionTreeClassifier(**hyparameters))])
-            
-        elif clf_name == "KNN":
-            estimator = Pipeline(steps = [
-                      ('one hot', one_hot_transformer),
-                      ('SC', MinMaxScaler()), # Good practice to use scaler 
-                      ('clf', KNeighborsClassifierW(**hyparameters))])
-        
-        elif clf_name == "LR":
-            estimator = Pipeline(steps = [
-                  ('one hot', one_hot_transformer),
-                  ('SC', MinMaxScaler()), # Good practice to use scaler in logistic regression
-                  ('clf', LogisticRegression(**hyparameters))])
-  
-        elif clf_name == "XGB":
-            estimator = Pipeline(steps = [
-                  ('one hot', one_hot_transformer),
-                  ('clf', XGBClassifier(**hyparameters))])
-        
-        elif clf_name == "LGBM2":
-            estimator = Pipeline(steps = [
-                  ('one hot', one_hot_transformer),
-                  ('clf', LGBMClassifier(**hyparameters))])
-        
-        elif clf_name == 'LGBM':
-            estimator =  Pipeline(steps = [ ('clf', LGBMClassifier(**hyparameters))])
-            
-        return estimator
