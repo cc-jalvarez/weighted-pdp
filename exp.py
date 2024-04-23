@@ -16,6 +16,7 @@ import pandas as pd
 import random
 import os
 import argparse
+
 # from joblib import dump, load
 
 # settings for the plots
@@ -172,8 +173,7 @@ def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10, dataset_name="s
         dict_source[q] = np.sum(np.where(binned_source == i, 1, 0))
         dict_target[q] = np.sum(np.where(binned_target == i, 1, 0))
     dict_weights = {
-        q: (dict_target[q] / dict_source[q])
-        * (df_s.shape[0]) / (df_t.shape[0])
+        q: (dict_target[q] / dict_source[q]) * (df_s.shape[0]) / (df_t.shape[0])
         if dict_source[q] > 0
         else 1
         for q in dict_source.keys()
@@ -402,8 +402,10 @@ def test_and_plot(
                 run,
                 bins,
             )
-            all_pd_clf_path_file = "results/{}/all_pd_clf_{}_{}_{}_{}_nbins{}.csv".format(
-                dataset_name, clf.__class__.__name__, run, col, sw, bins
+            all_pd_clf_path_file = (
+                "results/{}/all_pd_clf_{}_{}_{}_{}_nbins{}.csv".format(
+                    dataset_name, clf.__class__.__name__, run, col, sw, bins
+                )
             )
 
         if run == "unweighted":
@@ -653,7 +655,7 @@ def main(
             ("IN", "VA"),
             ("VA", "IN"),
         ]
-        for pair in tqdm(furthest_pairs+closest_pairs):
+        for pair in tqdm(furthest_pairs + closest_pairs):
             test_and_plot(
                 "folktables",
                 classifier,
@@ -662,7 +664,7 @@ def main(
                 state1=pair[0],
                 state2=pair[1],
                 run="sandbox",
-                bins=20,
+                bins=10,
             )
             test_and_plot(
                 "folktables",
@@ -672,7 +674,7 @@ def main(
                 state1=pair[0],
                 state2=pair[1],
                 run="deployed",
-                bins=20,
+                bins=10,
             )
     elif dataset_name == "all_synth":
         for sw in tqdm([0.05, 0.10, 0.25, 0.50]):
