@@ -16,7 +16,6 @@ import pandas as pd
 import random
 import os
 import argparse
-
 # from joblib import dump, load
 
 # settings for the plots
@@ -173,7 +172,8 @@ def get_weights(df_s, df_t, var_sel, bins: int or np.array = 10, dataset_name="s
         dict_source[q] = np.sum(np.where(binned_source == i, 1, 0))
         dict_target[q] = np.sum(np.where(binned_target == i, 1, 0))
     dict_weights = {
-        q: (dict_target[q] / dict_source[q]) * (df_s.shape[0]) / (df_t.shape[0])
+        q: (dict_target[q] / dict_source[q])
+        * (df_s.shape[0]) / (df_t.shape[0])
         if dict_source[q] > 0
         else 1
         for q in dict_source.keys()
@@ -353,25 +353,6 @@ def test_and_plot(
                 run,
                 bins,
             )
-            pf_ood_unw = "{}plots/{}/{}_{}_{}_{}_ood_{}_nbins{}.png".format(
-                img_fold,
-                dataset_name,
-                clf.__class__.__name__,
-                dataset_name,
-                state1 + "-" + state2,
-                col,
-                run,
-                bins,
-            )
-            delta_pdp_path_file = "results/{}/{}_{}_{}_{}_in_{}_nbins{}.png".format(
-                dataset_name,
-                clf.__class__.__name__,
-                dataset_name,
-                state1 + "-" + state2,
-                col,
-                run,
-                bins,
-            )
             all_pd_clf_path_file = "results/{}/allpdclf_{}_{}_{}_{}_bins{}.csv".format(
                 dataset_name,
                 clf.__class__.__name__,
@@ -392,20 +373,8 @@ def test_and_plot(
                 run,
                 bins,
             )
-            pf_ood_unw = "{}plots/{}/{}_{}_{}_{}_ood_{}_nbins{}.png".format(
-                img_fold,
-                dataset_name,
-                clf.__class__.__name__,
-                dataset_name,
-                sw,
-                col,
-                run,
-                bins,
-            )
-            all_pd_clf_path_file = (
-                "results/{}/all_pd_clf_{}_{}_{}_{}_nbins{}.csv".format(
-                    dataset_name, clf.__class__.__name__, run, col, sw, bins
-                )
+            all_pd_clf_path_file = "results/{}/all_pd_clf_{}_{}_{}_{}_nbins{}.csv".format(
+                dataset_name, clf.__class__.__name__, run, col, sw, bins
             )
 
         if run == "unweighted":
@@ -419,17 +388,10 @@ def test_and_plot(
                 title=run,
             )
         elif run == "sandbox":
-            if "synth" in dataset_name:
-                llabels = [
+            llabels = [
                     "unweighted - source data",
                     "weighted - source data",
                     "Oracle - target data",
-                ]
-            else:
-                llabels = [
-                    "unweighted - {}".format(state2),
-                    "weighted - {}".format(state2),
-                    "{} - Oracle".format(state2),
                 ]
             delta_pdp, all_pd_clf = multiple_plot_and_save_weighted_pdp(
                 [clf, clf, clf],
@@ -655,7 +617,7 @@ def main(
             ("IN", "VA"),
             ("VA", "IN"),
         ]
-        for pair in tqdm(furthest_pairs + closest_pairs):
+        for pair in tqdm(furthest_pairs+closest_pairs):
             test_and_plot(
                 "folktables",
                 classifier,
