@@ -1,4 +1,4 @@
-# Weighted (causal) partial dependence plots
+# The weighted (causal) partial dependence plots
 
 This repository serves two purposes. First, it is the working repository for the weighted (causal) partial dependence plot (WPDP) first introduced by [Lazzari, Alvarez, and Ruggieri (2022)](https://link.springer.com/article/10.1007/s41060-022-00329-w) [1]. The goal is to formalize further the WPDP under the risk of sample selection bias. The current repository is, thus, work in progress.
 
